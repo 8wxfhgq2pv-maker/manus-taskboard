@@ -57,6 +57,25 @@ const TOOLS = [
     },
   },
   {
+    name: "taskboard_update_issue",
+    description: "Update a Taskboard issue. Read it first and pass its current version; include at least one field to change.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        issueId: { type: "string", description: "Exact Taskboard issue ID or identifier." },
+        version: { type: "integer", minimum: 1, description: "Current issue version from taskboard_get_issue." },
+        projectId: { type: "string", description: "Exact target project ID." },
+        title: { type: "string" },
+        description: { type: "string" },
+        status: { type: "string", enum: TASK_STATUSES },
+        priority: { type: "string", enum: TASK_PRIORITIES },
+        labels: { type: "array", items: { type: "string" } },
+      },
+      required: ["issueId", "version"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "taskboard_get_issue",
     description: "Get one Taskboard issue by its exact identifier or ID.",
     inputSchema: {
@@ -193,6 +212,15 @@ async function invokeTool(name, args, invokeApi, onMutation, dashboardUrl) {
         if (args[key] !== undefined) body[key] = args[key];
       }
       const result = await invokeApi("POST", "/api/tasks", body);
+      await onMutation();
+      return result;
+    }
+    case "taskboard_update_issue": {
+      const body = { version: args.version };
+      for (const key of ["projectId", "title", "description", "status", "priority", "labels"]) {
+        if (args[key] !== undefined) body[key] = args[key];
+      }
+      const result = await invokeApi("PATCH", taskPath(args.issueId), body);
       await onMutation();
       return result;
     }
