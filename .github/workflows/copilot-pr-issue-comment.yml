@@ -24,14 +24,15 @@ jobs:
 
           OWNER="${REPOSITORY%%/*}"
           REPO_NAME="${REPOSITORY#*/}"
-          QUERY='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { closingIssuesReferences(first: 10) { nodes { number repository { nameWithOwner } } } } } }'
+          QUERY='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { body } } }'
 
-          LINKED_ISSUES="$(gh api graphql \
+          PR_BODY="$(gh api graphql \
             -F owner="$OWNER" \
             -F name="$REPO_NAME" \
             -F number="$PR_NUMBER" \
             -f query="$QUERY" \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[] | select(.repository.nameWithOwner == env.GITHUB_REPOSITORY) | .number')"
+            --jq '.data.repository.pullRequest.body // ""')"
+          LINKED_ISSUES="$(printf '%s\n' "$PR_BODY" | sed -nE 's/^Taskboard issue: #([0-9]+)$/\1/p' | head -n 1)"
 
           while IFS= read -r issue_number; do
             [[ -n "$issue_number" ]] || continue
