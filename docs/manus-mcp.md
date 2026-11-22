@@ -28,12 +28,20 @@ The visual board is available at `https://YOUR-WORKER-ORIGIN/`. In a Manus task,
 - `taskboard_get_dashboard_url` returns the HTTPS root URL for opening the board in a separate web page.
 - `taskboard_list_projects` lists projects and their exact IDs.
 - `taskboard_list_issues` lists issues, optionally filtered by project ID, status, or archive state.
+- `taskboard_search_issues` turns a natural-language request into text terms and optional project, status, priority, label, and inclusive due-date filters (`YYYY-MM-DD`).
 - `taskboard_create_issue` creates an issue; provide a title and optionally a project ID, description, status, priority, or labels.
 - `taskboard_update_issue` updates an issue's project, title, description, status, priority, or labels. Read the issue first and pass its current `version`.
 - `taskboard_get_issue` reads an issue by its exact ID or identifier.
 - `taskboard_list_comments` reads issue comments and returns a cursor for later incremental reads.
 - `taskboard_move_issue` changes an issue status. Read the issue first and pass its current `version`.
 - `taskboard_add_comment` adds a comment to an issue.
+
+## Reusable workflows
+
+The MCP server exposes reusable instructions through `prompts/list` and `prompts/get`:
+
+- `taskboard_triage` reviews open work, blockers, and priorities without mutating tasks; optionally pass an exact `projectId`.
+- `taskboard_issue_kickoff` reads one issue and its comments and prepares an implementation kickoff; pass its exact `issueId`.
 
 MCP access uses the same Cloudflare Taskboard data and permissions as the shared cloud board. Anyone holding the MCP token can read and update its projects and issues, so share it only with trusted users. Rotate it by running `npx wrangler secret put TASKBOARD_MANUS_MCP_TOKEN` again. Disable Manus access with `npx wrangler secret delete TASKBOARD_MANUS_MCP_TOKEN`.
 

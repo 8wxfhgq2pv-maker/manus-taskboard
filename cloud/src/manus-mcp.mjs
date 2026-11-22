@@ -40,6 +40,24 @@ const TOOLS = [
     },
   },
   {
+    name: "taskboard_search_issues",
+    description: "Find issues from a natural-language request. Translate the intent into meaningful query terms and any project, status, priority, label, or due-date filters. Text matches identifier, title, description, and labels; date bounds are inclusive YYYY-MM-DD values.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Meaningful search terms from the user's request." },
+        projectId: { type: "string", description: "Exact Taskboard project ID." },
+        status: { type: "string", enum: TASK_STATUSES },
+        archived: { type: "string", enum: ["true", "false", "all"] },
+        priority: { type: "string", enum: TASK_PRIORITIES },
+        label: { type: "string", description: "Exact label to match, case-insensitively." },
+        dueDateFrom: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+        dueDateTo: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "taskboard_create_issue",
     description: "Create a Taskboard issue in a project. The title is required; omitted optional fields use Taskboard defaults.",
     inputSchema: {
@@ -127,6 +145,23 @@ const TOOLS = [
   },
 ];
 const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
+const PROMPTS = [
+  {
+    name: "taskboard_triage",
+    description: "Review open Taskboard work, identify blockers and priorities, and propose next actions without changing tasks.",
+    arguments: [
+      { name: "projectId", description: "Optional exact project ID to limit the review.", required: false },
+    ],
+  },
+  {
+    name: "taskboard_issue_kickoff",
+    description: "Read one issue and its comments, then prepare a concise implementation kickoff.",
+    arguments: [
+      { name: "issueId", description: "Exact Taskboard issue ID or identifier.", required: true },
+    ],
+  },
+];
+const PROMPT_BY_NAME = new Map(PROMPTS.map((prompt) => [prompt.name, prompt]));
 const MCP_JSON_HEADERS = {
   "cache-control": "no-store",
   "content-type": "application/json; charset=utf-8",
@@ -190,6 +225,32 @@ function taskPath(issueId, suffix = "") {
   }
   return `/api/tasks/${encodeURIComponent(issueId)}${suffix}`;
 }
+function getPrompt(name, args) {
+  const prompt = PROMPT_BY_NAME.get(name);
+  if (!prompt) throw new Error(`Unknown Taskboard prompt '${String(name)}'`);
+  if (args === null || typeof args !== "object" || Array.isArray(args)) {
+    throw new Error("Prompt arguments must be an object");
+  }
+  for (const argument of prompt.arguments) {
+    const value = args[argument.name];
+    if (argument.required && (typeof value !== "string" || value.trim() === "")) {
+      throw new Error(`Prompt argument '${argument.name}' is required`);
+    }
+    if (value !== undefined && typeof value !== "string") {
+      throw new Error(`Prompt argument '${argument.name}' must be a string`);
+    }
+  }
+  const scope = args.projectId
+    ? `Limit all reads to the exact project ID '${args.projectId}'.`
+    : "Review open work across all projects.";
+  const text = name === "taskboard_triage"
+    ? `Use Taskboard tools to triage open work. ${scope} Read matching todo, in_progress, and blocked issues, including their comments when needed. Group findings by priority and status, call out concrete blockers and dependencies, and recommend the next action for each relevant issue. Do not claim backlog work, change statuses, edit issues, or add comments unless the user explicitly asks for those mutations.`
+    : `Use Taskboard tools to prepare an implementation kickoff for the exact issue ID or identifier '${args.issueId}'. Read the issue with taskboard_get_issue and read all comments with taskboard_list_comments, following nextCursor until complete. Summarize the requested outcome, acceptance details, current state, and blockers; propose the first concrete action and identify any missing information. Do not change the issue, status, or comments unless the user explicitly asks.`;
+  return {
+    description: prompt.description,
+    messages: [{ role: "user", content: { type: "text", text } }],
+  };
+}
 async function invokeTool(name, args, invokeApi, onMutation, dashboardUrl) {
   if (args === null || typeof args !== "object" || Array.isArray(args)) {
     throw new Error("Tool arguments must be a JSON object");
@@ -205,6 +266,48 @@ async function invokeTool(name, args, invokeApi, onMutation, dashboardUrl) {
         if (args[key] !== undefined) query.set(parameter, String(args[key]));
       }
       return invokeApi("GET", `/api/tasks${query.size ? `?${query}` : ""}`);
+    }
+    case "taskboard_search_issues": {
+      const query = new URLSearchParams();
+      for (const key of ["projectId", "status", "archived"]) {
+        if (args[key] !== undefined) query.set(key, String(args[key]));
+      }
+      const result = await invokeApi("GET", `/api/tasks${query.size ? `?${query}` : ""}`);
+      if (args.query !== undefined && typeof args.query !== "string") {
+        throw new Error("query must be a string");
+      }
+      if (args.priority !== undefined && !TASK_PRIORITIES.includes(args.priority)) {
+        throw new Error(`priority must be one of: ${TASK_PRIORITIES.join(", ")}`);
+      }
+      if (args.label !== undefined && typeof args.label !== "string") {
+        throw new Error("label must be a string");
+      }
+      for (const key of ["dueDateFrom", "dueDateTo"]) {
+        const value = args[key];
+        if (value !== undefined && (
+          typeof value !== "string"
+          || !/^\d{4}-\d{2}-\d{2}$/.test(value)
+          || new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) !== value
+        )) {
+          throw new Error(`${key} must be a valid YYYY-MM-DD date`);
+        }
+      }
+      const terms = (args.query ?? "").normalize("NFKC").toLocaleLowerCase().split(/\s+/).filter(Boolean);
+      const label = args.label?.toLocaleLowerCase();
+      return {
+        ...result,
+        tasks: result.tasks.filter((task) => {
+          const text = [task.identifier, task.title, task.description, ...task.labels]
+            .join(" ")
+            .normalize("NFKC")
+            .toLocaleLowerCase();
+          return terms.every((term) => text.includes(term))
+            && (args.priority === undefined || task.priority === args.priority)
+            && (label === undefined || task.labels.some((value) => value.toLocaleLowerCase() === label))
+            && (args.dueDateFrom === undefined || (task.dueDate !== null && task.dueDate >= args.dueDateFrom))
+            && (args.dueDateTo === undefined || (task.dueDate !== null && task.dueDate <= args.dueDateTo));
+        }),
+      };
     }
     case "taskboard_create_issue": {
       const body = {};
@@ -359,7 +462,7 @@ export async function handleManusMcpRequest(request, env, {
     }
     return rpcResult(id, {
       protocolVersion: requestedVersion,
-      capabilities: { tools: { listChanged: false } },
+      capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
       serverInfo: { name: "codex-taskboard-manus", version: "1.0.0" },
       instructions: "Use Taskboard tools with exact project and issue identifiers. Read the current issue version before moving it. Call taskboard_get_dashboard_url to provide the HTTPS visual panel entry; it opens separately and is not embedded in the Manus chat.",
     });
@@ -371,6 +474,16 @@ export async function handleManusMcpRequest(request, env, {
   if (message.method === "ping") return rpcResult(id, {});
   if (message.method === "tools/list") {
     return rpcResult(id, { tools: TOOLS });
+  }
+  if (message.method === "prompts/list") {
+    return rpcResult(id, { prompts: PROMPTS });
+  }
+  if (message.method === "prompts/get") {
+    try {
+      return rpcResult(id, getPrompt(message.params?.name, message.params?.arguments ?? {}));
+    } catch (error) {
+      return rpcError(id, -32602, error instanceof Error ? error.message : String(error));
+    }
   }
   if (message.method === "tools/call") {
     const name = message.params?.name;
