@@ -28,6 +28,7 @@ The visual board is available at `https://YOUR-WORKER-ORIGIN/`. In a Manus task,
 - `taskboard_get_dashboard_url` returns the HTTPS root URL for opening the board in a separate web page.
 - `taskboard_list_projects` lists projects and their exact IDs.
 - `taskboard_list_issues` lists issues, optionally filtered by project ID, status, or archive state.
+- `taskboard_create_issue` creates an issue; provide a title and optionally a project ID, description, status, priority, or labels.
 - `taskboard_get_issue` reads an issue by its exact ID or identifier.
 - `taskboard_list_comments` reads issue comments and returns a cursor for later incremental reads.
 - `taskboard_move_issue` changes an issue status. Read the issue first and pass its current `version`.

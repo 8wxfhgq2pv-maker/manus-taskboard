@@ -14,6 +14,7 @@ const TASK_STATUSES = [
   "done",
   "canceled",
 ];
+const TASK_PRIORITIES = ["none", "urgent", "high", "medium", "low"];
 const TOOLS = [
   {
     name: "taskboard_get_dashboard_url",
@@ -35,6 +36,23 @@ const TOOLS = [
         status: { type: "string", enum: TASK_STATUSES },
         archived: { type: "string", enum: ["true", "false", "all"] },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "taskboard_create_issue",
+    description: "Create a Taskboard issue in a project. The title is required; omitted optional fields use Taskboard defaults.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string", description: "Exact Taskboard project ID; omit to use the default project." },
+        title: { type: "string", description: "Issue title (required)." },
+        description: { type: "string", description: "Issue description." },
+        status: { type: "string", enum: TASK_STATUSES },
+        priority: { type: "string", enum: TASK_PRIORITIES },
+        labels: { type: "array", items: { type: "string" } },
+      },
+      required: ["title"],
       additionalProperties: false,
     },
   },
@@ -168,6 +186,15 @@ async function invokeTool(name, args, invokeApi, onMutation, dashboardUrl) {
         if (args[key] !== undefined) query.set(parameter, String(args[key]));
       }
       return invokeApi("GET", `/api/tasks${query.size ? `?${query}` : ""}`);
+    }
+    case "taskboard_create_issue": {
+      const body = {};
+      for (const key of ["projectId", "title", "description", "status", "priority", "labels"]) {
+        if (args[key] !== undefined) body[key] = args[key];
+      }
+      const result = await invokeApi("POST", "/api/tasks", body);
+      await onMutation();
+      return result;
     }
     case "taskboard_get_issue":
       return invokeApi("GET", taskPath(args.issueId));
