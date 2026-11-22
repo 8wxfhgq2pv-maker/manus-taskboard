@@ -36,6 +36,13 @@ The visual board is available at `https://YOUR-WORKER-ORIGIN/`. In a Manus task,
 - `taskboard_move_issue` changes an issue status. Read the issue first and pass its current `version`.
 - `taskboard_add_comment` adds a comment to an issue.
 
+## Reusable workflows
+
+The MCP server exposes reusable instructions through `prompts/list` and `prompts/get`:
+
+- `taskboard_triage` reviews open work, blockers, and priorities without mutating tasks; optionally pass an exact `projectId`.
+- `taskboard_issue_kickoff` reads one issue and its comments and prepares an implementation kickoff; pass its exact `issueId`.
+
 MCP access uses the same Cloudflare Taskboard data and permissions as the shared cloud board. Anyone holding the MCP token can read and update its projects and issues, so share it only with trusted users. Rotate it by running `npx wrangler secret put TASKBOARD_MANUS_MCP_TOKEN` again. Disable Manus access with `npx wrangler secret delete TASKBOARD_MANUS_MCP_TOKEN`.
 
 Manus's custom MCP connector expects a remotely reachable HTTPS server. It lets Manus discover and call Taskboard tools from an agent task; the panel link opens the existing Taskboard Web UI separately.
