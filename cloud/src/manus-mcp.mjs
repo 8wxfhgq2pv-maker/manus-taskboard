@@ -40,6 +40,24 @@ const TOOLS = [
     },
   },
   {
+    name: "taskboard_search_issues",
+    description: "Find issues from a natural-language request. Translate the intent into meaningful query terms and any project, status, priority, label, or due-date filters. Text matches identifier, title, description, and labels; date bounds are inclusive YYYY-MM-DD values.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Meaningful search terms from the user's request." },
+        projectId: { type: "string", description: "Exact Taskboard project ID." },
+        status: { type: "string", enum: TASK_STATUSES },
+        archived: { type: "string", enum: ["true", "false", "all"] },
+        priority: { type: "string", enum: TASK_PRIORITIES },
+        label: { type: "string", description: "Exact label to match, case-insensitively." },
+        dueDateFrom: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+        dueDateTo: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "taskboard_create_issue",
     description: "Create a Taskboard issue in a project. The title is required; omitted optional fields use Taskboard defaults.",
     inputSchema: {
@@ -205,6 +223,48 @@ async function invokeTool(name, args, invokeApi, onMutation, dashboardUrl) {
         if (args[key] !== undefined) query.set(parameter, String(args[key]));
       }
       return invokeApi("GET", `/api/tasks${query.size ? `?${query}` : ""}`);
+    }
+    case "taskboard_search_issues": {
+      const query = new URLSearchParams();
+      for (const key of ["projectId", "status", "archived"]) {
+        if (args[key] !== undefined) query.set(key, String(args[key]));
+      }
+      const result = await invokeApi("GET", `/api/tasks${query.size ? `?${query}` : ""}`);
+      if (args.query !== undefined && typeof args.query !== "string") {
+        throw new Error("query must be a string");
+      }
+      if (args.priority !== undefined && !TASK_PRIORITIES.includes(args.priority)) {
+        throw new Error(`priority must be one of: ${TASK_PRIORITIES.join(", ")}`);
+      }
+      if (args.label !== undefined && typeof args.label !== "string") {
+        throw new Error("label must be a string");
+      }
+      for (const key of ["dueDateFrom", "dueDateTo"]) {
+        const value = args[key];
+        if (value !== undefined && (
+          typeof value !== "string"
+          || !/^\d{4}-\d{2}-\d{2}$/.test(value)
+          || new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) !== value
+        )) {
+          throw new Error(`${key} must be a valid YYYY-MM-DD date`);
+        }
+      }
+      const terms = (args.query ?? "").normalize("NFKC").toLocaleLowerCase().split(/\s+/).filter(Boolean);
+      const label = args.label?.toLocaleLowerCase();
+      return {
+        ...result,
+        tasks: result.tasks.filter((task) => {
+          const text = [task.identifier, task.title, task.description, ...task.labels]
+            .join(" ")
+            .normalize("NFKC")
+            .toLocaleLowerCase();
+          return terms.every((term) => text.includes(term))
+            && (args.priority === undefined || task.priority === args.priority)
+            && (label === undefined || task.labels.some((value) => value.toLocaleLowerCase() === label))
+            && (args.dueDateFrom === undefined || (task.dueDate !== null && task.dueDate >= args.dueDateFrom))
+            && (args.dueDateTo === undefined || (task.dueDate !== null && task.dueDate <= args.dueDateTo));
+        }),
+      };
     }
     case "taskboard_create_issue": {
       const body = {};
