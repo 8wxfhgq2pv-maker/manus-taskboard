@@ -1,0 +1,45 @@
+name: Link Copilot pull requests to issues
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  comment-linked-issues:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Comment the pull request link on linked issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          OWNER="${REPOSITORY%%/*}"
+          REPO_NAME="${REPOSITORY#*/}"
+          QUERY='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { body } } }'
+
+          PR_BODY="$(gh api graphql \
+            -F owner="$OWNER" \
+            -F name="$REPO_NAME" \
+            -F number="$PR_NUMBER" \
+            -f query="$QUERY" \
+            --jq '.data.repository.pullRequest.body // ""')"
+          LINKED_ISSUES="$(printf '%s\n' "$PR_BODY" | sed -nE 's/^Taskboard issue: #([0-9]+)$/\1/p' | head -n 1)"
+
+          while IFS= read -r issue_number; do
+            [[ -n "$issue_number" ]] || continue
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "repos/$REPOSITORY/issues/$issue_number/comments" \
+              -f body="Copilot coding agent opened a pull request: $PR_URL"
+          done <<< "$LINKED_ISSUES"
