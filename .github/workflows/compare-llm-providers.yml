@@ -1,0 +1,119 @@
+# Copy to .github/workflows/compare-llm-providers.yml after adding the required Actions secrets.
+# This is a manual smoke test: it sends the same prompt to both providers and writes answers to the run summary.
+# It does not check out the repository, run model-generated code, commit changes, or create a PR.
+# Docs: https://openrouter.ai/docs/guides/routing/routers/free-router
+#       https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/
+
+name: Compare OpenRouter and Cloudflare Workers AI
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Prompt sent to both model APIs
+        required: true
+        type: string
+        default: "Explain in one short sentence what a GitHub Actions workflow does."
+
+# This workflow only calls external inference APIs; it does not need repository write access.
+permissions: {}
+
+jobs:
+  openrouter:
+    name: OpenRouter free model
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call OpenRouter
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TEST_PROMPT: ${{ inputs.prompt }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENROUTER_API_KEY}" ]]; then
+            echo "::error::Add the OPENROUTER_API_KEY Actions secret."
+            exit 1
+          fi
+
+          umask 077
+          auth_config="$(mktemp)"
+          request_file="$(mktemp)"
+          response_file="$(mktemp)"
+          trap 'rm -f "$auth_config" "$request_file" "$response_file"' EXIT
+
+          # Keep the API key out of the curl command-line arguments and logs.
+          printf 'header = "Authorization: Bearer %s"\n' "$OPENROUTER_API_KEY" > "$auth_config"
+          jq -n \
+            --arg model "openrouter/free" \
+            --arg prompt "$TEST_PROMPT" \
+            '{model:$model, messages:[{role:"user", content:$prompt}], max_tokens:512, stream:false}' \
+            > "$request_file"
+
+          curl --config "$auth_config" \
+            --fail-with-body --silent --show-error --max-time 90 \
+            --request POST \
+            --url "https://openrouter.ai/api/v1/chat/completions" \
+            --header "Content-Type: application/json" \
+            --data-binary "@$request_file" \
+            --output "$response_file"
+
+          answer="$(jq -er '.choices[0].message.content' "$response_file")"
+          actual_model="$(jq -r '.model // "unknown"' "$response_file")"
+          token_count="$(jq -r '.usage.total_tokens // "not returned"' "$response_file")"
+          {
+            printf '## OpenRouter\n\n'
+            printf '**Model selected:** `%s`  \n' "$actual_model"
+            printf '**Tokens reported:** %s\n\n' "$token_count"
+            printf '%s\n\n' "$answer"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  cloudflare:
+    name: Cloudflare Workers AI
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call Workers AI
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TEST_PROMPT: ${{ inputs.prompt }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CLOUDFLARE_ACCOUNT_ID}" || -z "${CLOUDFLARE_API_TOKEN}" ]]; then
+            echo "::error::Add CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN Actions secrets."
+            exit 1
+          fi
+
+          umask 077
+          auth_config="$(mktemp)"
+          request_file="$(mktemp)"
+          response_file="$(mktemp)"
+          trap 'rm -f "$auth_config" "$request_file" "$response_file"' EXIT
+
+          # Keep the API token out of the curl command-line arguments and logs.
+          printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN" > "$auth_config"
+          jq -n \
+            --arg model "@cf/meta/llama-3.1-8b-instruct" \
+            --arg prompt "$TEST_PROMPT" \
+            '{model:$model, messages:[{role:"user", content:$prompt}], max_tokens:512, stream:false}' \
+            > "$request_file"
+
+          curl --config "$auth_config" \
+            --fail-with-body --silent --show-error --max-time 90 \
+            --request POST \
+            --url "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1/chat/completions" \
+            --header "Content-Type: application/json" \
+            --data-binary "@$request_file" \
+            --output "$response_file"
+
+          answer="$(jq -er '.choices[0].message.content' "$response_file")"
+          actual_model="$(jq -r '.model // "@cf/meta/llama-3.1-8b-instruct"' "$response_file")"
+          token_count="$(jq -r '.usage.total_tokens // "not returned"' "$response_file")"
+          {
+            printf '## Cloudflare Workers AI\n\n'
+            printf '**Model:** `%s`  \n' "$actual_model"
+            printf '**Tokens reported:** %s\n\n' "$token_count"
+            printf '%s\n\n' "$answer"
+          } >> "$GITHUB_STEP_SUMMARY"
